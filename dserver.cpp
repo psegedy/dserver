@@ -17,7 +17,6 @@ int main(int argc, char **argv)
 	addresses addr;
 	int rcBytes;
 	int port = SERVER_PORT;
-	unsigned char buff[BUFSIZE];
 	struct sockaddr_in sa;
 	struct sockaddr_in client; // address of client
 	socklen_t length; // length of sockaddr_in client
@@ -41,7 +40,6 @@ int main(int argc, char **argv)
 			string delim(":");
 			array<u_char, 16> mac_arr;
 			while (infile >> mac >> ip) {
-				cout << "mac: " << mac << " ip: " << ip << endl;
 				if (inet_addr(ip.c_str()) == (uint32_t)-1) {
 					cerr << "Error: Invalid IP address: " << ip << " in file: " << filename << endl;
 					return EXIT_FAILURE;
@@ -61,12 +59,6 @@ int main(int argc, char **argv)
 					cerr << "Error: Invalid MAC address in file: " << filename << endl;
 					return EXIT_FAILURE;
 				}
-				cout << "--------------" << endl;
-				for (int i = 0; i < 6; ++i)
-				{
-					cout << hex << +mac_arr[i] << ":";
-				}
-				cout << dec << "--------------" << endl;
 				lease.emplace_back(mac_arr, inet_addr(ip.c_str()), time(nullptr), time(nullptr) + LEASE_100Y);
 				excluded.push_back(inet_addr(ip.c_str()));
 			}
@@ -80,31 +72,16 @@ int main(int argc, char **argv)
 
 	get_addresses(&addr);
 
-	cout << "network: " << inet_ntoa(*(struct in_addr *)&addr.network) << endl;
-	cout << "mask: " << inet_ntoa(*(struct in_addr *)&addr.mask) << endl;
-	cout << "first: " << inet_ntoa(*(struct in_addr *)&addr.first) << endl;
-	cout << "last: " << inet_ntoa(*(struct in_addr *)&addr.last) << endl;
-	cout << "broadcast: " << inet_ntoa(*(struct in_addr *)&addr.broadcast) << endl;
-
 	//initialize address pool
 	for (uint32_t i = addr.first; i <= addr.last; i += htonl(1)) {
 		pool.push_back(i);
 	}
 
-	for (auto i = pool.begin(); i != pool.end(); ++i) {
-		cout << inet_ntoa(*(struct in_addr *)&(*i)) << " ";
-	}
-	cout << endl;
 	//delete first address (server address) and excluded addresses from pool
 	pool.erase(pool.begin());
 	for (auto i = excluded.begin(); i != excluded.end(); ++i) {
 		pool.erase(remove(pool.begin(), pool.end(), *i), pool.end());
 	}
-
-	for (auto i = pool.begin(); i != pool.end(); ++i) {
-		cout << inet_ntoa(*(struct in_addr *)&(*i)) << " ";
-	}
-	cout << endl;
 
 	// create UDP socket
 	if ((socket_handle = socket(AF_INET, SOCK_DGRAM, 0)) < 0) {
@@ -125,32 +102,21 @@ int main(int argc, char **argv)
 	}
 	length = sizeof(client);
 
-	while((rcBytes = recvfrom(socket_handle, buff, BUFSIZE, 0, (struct sockaddr*)&client, &length)) >= 0) {
-		cout << "Request received from: " << inet_ntoa(client.sin_addr);
-		cout << " port: " << ntohs(client.sin_port) << endl;
+	while((rcBytes = recvfrom(socket_handle, &packet, sizeof(packet), 0, (struct sockaddr*)&client, &length)) >= 0) {
 		del_expired(pool, lease); //delete expired leases
-
-		memcpy(&packet, &buff, rcBytes); //TODO: move to recvfrom
-
 		int message_type = get_message_type(&packet);
 
 		if (message_type == DHCPDISCOVER) {
-			cout << "Mam DIscover\n";
-			if ((offered_address = offer(socket_handle, &packet, &addr, pool, lease)) == 1) {
+			if ((offered_address = offer(socket_handle, &packet, &addr, pool, lease)) == 1)
 				cerr << "ERR: Failed to offer" << endl;
-			}
 		}
 		else if (message_type == DHCPREQUEST) {
 			//check request && send ACK/NAK
-			cout << "MAM REQUEST, poslem ACK/NAK" << endl;
 			uint32_t req_addr = 0;
-			cout << "R: " << ntohl(inet_addr("192.168.0.10")) << "\nF: " << ntohl(addr.first) << " " << inet_ntoa(*(struct in_addr *)&addr.first) << "\nL: " << ntohl(addr.last) << " ";
-			cout << inet_ntoa(*(struct in_addr *)&addr.last) << endl;
 			// SELECTING state
 			if (check_ip_addr(&packet, addr.first, OPT_SERVER_ID) == 0
 				&& check_ip_addr(&packet, offered_address, OPT_REQ_IP) == 0
 				&& packet.ciaddr == 0) {
-				cout << "SELECTING\n";
 				if (ack(socket_handle, &packet, offered_address, &addr, pool, lease) != 0)
 					cerr << "ERR: Failed to ack" << endl;
 			}
@@ -158,28 +124,22 @@ int main(int argc, char **argv)
 			else if (check_ip_addr(&packet, addr.first, OPT_SERVER_ID) == 2
 				&& packet.ciaddr == 0) {
 				check_ip_addr(&packet, req_addr, OPT_REQ_IP, &req_addr);
-				cout << "INIT-REBOOT, request: " << inet_ntoa(*(struct in_addr *)&req_addr) << endl;
 				if (packet.giaddr == 0) {
 					if (ntohl(req_addr) < ntohl(addr.first) || ntohl(req_addr) > ntohl(addr.last)) {
 						// ip address is not from my pool -> send DHCPNAK
 						if (nak(socket_handle, &packet, &addr) != 0)
 							cerr << "Err: Failed to send DHCPNAK" << endl;
-						cout << "TODO: SEND NACK-----------------" << endl;
 					}
 					int i = 0;
-					// cout << get<0>(lease[0]) << endl;
 					if ((i = find_by_mac(lease, packet.chaddr)) != -1) {
 						// check that it requests address same as in lease
-						cout << "DEBUG: checking req_addr" << endl;
 						if (get<1>(lease[i]) == req_addr) {
-							cout << "DEBUG: req_addr OK" << endl;
 							if (ack(socket_handle, &packet, req_addr, &addr, pool, lease) != 0)
 								cerr << "ERR: Failed to ack" << endl;
 						}
 						else {
 							if (nak(socket_handle, &packet, &addr) != 0)
 								cerr << "Err: Failed to send DHCPNAK" << endl;
-							cout << "DEBUG: req_addr BAD, send NACK?" << endl;
 						}
 					}
 					// address not in leases -> do nothing, be silent
@@ -192,21 +152,18 @@ int main(int argc, char **argv)
 			else if (check_ip_addr(&packet, addr.first, OPT_SERVER_ID) == 2 
 				&& check_ip_addr(&packet, req_addr, OPT_SERVER_ID) == 2
 				&& packet.ciaddr != 0) {
-				cout << "RENEWING/REBINDING" << endl;
 				if (ack(socket_handle, &packet, packet.ciaddr, &addr, pool, lease) != 0)
 					cerr << "ERR: Failed to ack" << endl;
 			}			
 			offered_address = (uint32_t)-1;
 		}
 		else if (message_type == DHCPRELEASE) {
-			cout << "MAM RELEASE, uvolnim adresu" << endl;
 			del_by_mac(lease, pool, &packet, DHCPRELEASE);
 		}
 	}
 	return 0;
 }
 
-//TODO pridat IP adresy, rozsahy?
 uint32_t offer(int socket_handle, dhcp_packet *disc_packet, addresses *addr, vector<uint32_t> &pool,  vector<tuple<array<u_char, 16>, uint32_t, time_t, time_t>> &lease)
 {
 	int err;
@@ -223,7 +180,6 @@ uint32_t offer(int socket_handle, dhcp_packet *disc_packet, addresses *addr, vec
 		return 1;
 	}
 
-
 	memset(&offer_packet, 0, sizeof(offer_packet));
 	memset(&sa, 0, sizeof(sa));
 	sa.sin_family=AF_INET;
@@ -238,7 +194,7 @@ uint32_t offer(int socket_handle, dhcp_packet *disc_packet, addresses *addr, vec
 		sa.sin_addr.s_addr = addr->broadcast;
 	}
 	else {
-		// temporary solution
+		// temporary solution - send as broadcast
 		on = 1;
 		sa.sin_addr.s_addr = addr->broadcast;
 	}
@@ -257,7 +213,6 @@ uint32_t offer(int socket_handle, dhcp_packet *disc_packet, addresses *addr, vec
 		addr1 = pool.front();	//give client first address of pool
 		pool.erase(pool.begin());	//delete first address from pool	
 	}
-	cout << "DEBUG(253) i: " << i << " addr1: " << addr1 << endl;
 	uint32_t addr2 = addr->first;
 	memcpy(&offer_packet.yiaddr, &addr1, 4);
 	memcpy(&offer_packet.siaddr, &addr2, 4);
@@ -389,7 +344,6 @@ int ack(int socket_handle, dhcp_packet *packet, uint32_t offered_address, addres
 
 		client_mac.fill(0);
 		// print table of leases
-		// for(auto row : lease) {
 		auto row = lease.back();
 		client_mac = get<0>(row);
 		for (int i = 0; i < 5; ++i)
@@ -400,10 +354,9 @@ int ack(int socket_handle, dhcp_packet *packet, uint32_t offered_address, addres
 		string end(buff_end);
 		start.erase(start.find('\n', 0), 1);	// delete trailing \n
 		end.erase(end.find('\n', 0), 1);
-		// }
 		cout << hex << +client_mac[5] << dec << " " << inet_ntoa(*(struct in_addr *)&get<1>(row)) << " " << start << " " << end << endl;
 	}
-	else {
+	else { //if there is statically allocated address
 		int i = -1;
 		if ((i = find_by_mac(lease, ack_packet.chaddr)) != -1) {
 			addr1 = get<1>(lease[i]);
@@ -420,7 +373,6 @@ int ack(int socket_handle, dhcp_packet *packet, uint32_t offered_address, addres
 			cout << hex << +client_mac[5] << dec << " " << inet_ntoa(*(struct in_addr *)&get<1>(lease[i])) << " " << start << " " << end << endl;
 		}
 	}
-	
 	return 0;
 }
 
@@ -492,13 +444,12 @@ void del_expired(vector<uint32_t> &pool, vector<tuple<array<u_char, 16>, uint32_
 	vector<tuple<array<u_char, 16>, uint32_t, time_t, time_t>> to_delete;
 	to_delete.clear();
 	for (auto i = lease.begin(); i != lease.end(); ++i) {
-		cout << "now: " << now << "end: " << get<3>(*i) << endl;
 		if (now > get<3>(*i)) {
-			cout << "deleting" << endl;
 			to_delete.push_back(*i);
 			pool.push_back(get<1>(*i));
 		}
 	}
+	// delete all lines marked for deletion
 	for (auto i = to_delete.begin(); i != to_delete.end(); ++i)
 		lease.erase(remove(lease.begin(), lease.end(), *i), lease.end());
 }
@@ -514,19 +465,15 @@ int del_by_mac(vector<tuple<array<u_char, 16>, uint32_t, time_t, time_t>> &lease
 			uint32_t addr = get<1>(*i);
 			if (get<3>(*i) < (time(nullptr) + LEASE_TIME)) { //address is not statically allocated
 				if (message_type == DHCPRELEASE || packet->yiaddr != addr) {
-					cout << "release address: " << inet_ntoa(*(struct in_addr *)&addr) << endl;
 					pool.push_back(addr);
-					for (auto i = pool.begin(); i != pool.end(); ++i) {
-						cout << inet_ntoa(*(struct in_addr *)&(*i)) << " ";
-					}
-					cout << endl;
 				}
 				to_delete.push_back(*i);
 			}
 			else
-				return 1; //address is statically allocated
+				return 1; //address is statically allocated - do not delete
 		}
 	}
+	// delete all lines marked for deletion
 	for (auto i = to_delete.begin(); i != to_delete.end(); ++i) {
 		lease.erase(remove(lease.begin(), lease.end(), *i), lease.end());
 	}
@@ -537,15 +484,11 @@ int find_by_mac(vector<tuple<array<u_char, 16>, uint32_t, time_t, time_t>> &leas
 {
 	array<u_char, 16> chaddr_arr;
 	memcpy(&chaddr_arr, mac, 16);
-	cout << "DEBUG: finding mac: " << mac << endl;
-	
 	for (auto i = lease.begin(); i != lease.end(); ++i) {
 		if (chaddr_arr == get<0>(*i)) {
-			cout << "DEBUG: address found at: " << i - lease.begin() << endl; 
-			return i - lease.begin();
+			return i - lease.begin();	// returns index
 		}
 	}
-	cout << "DEBUG: Mac not found" << endl;
 	return -1;
 }
 
@@ -652,6 +595,7 @@ int check_args(int argc, char **argv, addresses *addr, vector<uint32_t> &exclude
 					}
 					excluded.push_back(temp);
 				}
+				// -s <static-file>
 				if (strcmp(argv[3], "-s") == 0) {
 					static_file = argv[4];
 				}
@@ -675,11 +619,6 @@ int check_args(int argc, char **argv, addresses *addr, vector<uint32_t> &exclude
 		usage();
 		return 1;
 	}
-	for (auto i = excluded.begin(); i != excluded.end(); ++i) {
-		cout << " " << inet_ntoa(*(struct in_addr *)&(*i));
-	}
-	cout << endl;
-
 	return 0;
 }
 
