@@ -1,0 +1,17 @@
+Jednoduchý DHCP server v C++11 podporujúci správy DHCPDISCOVER, DHCPOFFER, DHCPREQUEST, DHCPACK, DHCPNAK a DHCPRELEASE
+
+Pre použitie programu je nutné najprv tento program preložiť pomocou príkazu make, ktorý vytvorí spustiteľný súbor dserver.
+
+Parametre programu:
+•	-p <ip_addresa/maska>	rozsah prideľovaných IP adries
+•	-e <ip_addresy>			adresy z daného rozsahu, ktoré sa nepriradzujú žiadnym klientom (oddelené čiarkou)
+•	-s <meno_suboru>		súbor so statickými alokáciami (zoznam MAC adries a IP adries, ktoré sa k nim budú priradzovať)
+
+Ukážka obsahu súboru so statickými alokáciami:
+00:0b:82:01:fc:42 192.168.0.99
+c8:0a:a9:cd:7d:81 192.168.0.101
+
+Ukážka spustenia programu:
+	./dserver -p 192.168.0.0/24 [-e 192.168.0.1,192.168.0.2]
+
+Program sa ukončí po obdŕžaní signálu SIGINT.
